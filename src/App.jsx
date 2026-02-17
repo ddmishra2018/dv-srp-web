@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import { 
   User, 
   Mail, 
@@ -19,10 +19,47 @@ export default function App() {
   const [formData, setFormData] = useState(initialFormData);
   const [isSaving, setIsSaving] = useState(false);
   const [submissionSuccess, setSubmissionSuccess] = useState(false);
+  const [errorMessage, setErrorMessage] = useState(null);
+  const [debugInfo, setDebugInfo] = useState(null); // For capturing raw API responses in case of errors
   
-  const [errorMessage, setErrorMessage] = useState(null); 
+    /**
+   * ENVIRONMENT CONFIGURATION
+   * We use a safe access pattern for Vite environment variables to prevent
+   * compilation warnings in restricted target environments.
+   */
+  const getEnvVar = (key, fallback = '') => {
+    try {
+      // Accessing via bracket notation to avoid static analysis issues in some environments
+      const meta = import.meta;
+      const env = meta && meta.env ? meta.env : {};
+      return env[key] || fallback;
+      //return import.meta.env[key] || fallback;
+    } catch (e) {
+      return fallback;
+    }
+  };
+
+  //const [errorMessage, setErrorMessage] = useState(null); 
+  //const API_BASE_URL = getEnvVar('VITE_API_BASE_URL', 'http://localhost:8080');
   const API_BASE_URL = import.meta.env.VITE_API_BASE_URL || 'http://localhost:8080';
-  const REGISTRATION_API = `${API_BASE_URL}/bootcamp/v1/users/register`;
+  const APP_MODE = getEnvVar('MODE', 'production');
+  const REGISTRATION_API = `${API_BASE_URL}/users/register`;
+
+    // DIAGNOSTIC LOGGING
+  useEffect(() => {
+    // Safely check for the variable to avoid the build-time warning/error
+    const rawBaseUrl = getEnvVar('VITE_API_BASE_URL');
+    
+    console.log("--- API DIAGNOSTICS ---");
+    console.log("VITE_API_BASE_URL Value:", rawBaseUrl);
+    console.log("Constructed Registration API Path:", REGISTRATION_API);
+    
+    if (REGISTRATION_API.includes('<') || REGISTRATION_API.includes('>')) {
+      console.error("CRITICAL: API URL contains placeholders. Build-time injection failed.");
+      setErrorMessage("System Configuration Error: API URL is malformed (placeholders detected).");
+    }
+  }, [REGISTRATION_API]);
+
 
 
   // Generic handler for form fields
@@ -47,6 +84,7 @@ export default function App() {
     setErrorMessage(null);
     setSubmissionSuccess(false);
 
+    console.log('Attempting registration at:', REGISTRATION_API);
     try {
       const response = await fetch(REGISTRATION_API, {
         method: 'POST',
@@ -61,18 +99,28 @@ export default function App() {
         })
       });
 
-      if (!response.ok) {
-        try {
-          const errorBody = await response.json();
-          throw new Error(errorBody.message || `: Server returned status ${response.status}` || '... Registration failed');
-        } catch (err) {
-          throw new Error(err.message);
+      const contentType = response.headers.get("content-type") || "";
+      const isJson = contentType.includes("application/json");
+      
+      if (isJson) {
+        const data = await response.json();
+        if (response.ok) {
+          setSubmissionSuccess(true);
+          setFormData(initialFormData);
+        } else {
+          setErrorMessage(data.message || `API Error: ${response.status}`);
         }
+      } else {
+        console.log("Routing Error: Received HTML instead of JSON. The request likely hit S3 instead of the API.");
+        // This handles the "False 200" scenario where HTML is returned instead of JSON
+        const rawText = await response.text();
+        const snippet = rawText.substring(0, 200); // Capture start of HTML for debugging
+        
+        setErrorMessage(`Infrastructure Error: Expected JSON but received HTML. The VPC Link or Gateway might be misconfigured.`);
+        setDebugInfo(snippet);
+        console.error("Non-JSON response received:", rawText);
       }
-
-      await response.json();
-      setSubmissionSuccess(true);
-      setFormData(initialFormData);
+       
     } catch (err) {
       console.error("API Submission Error:", err);
       setErrorMessage(err.message);
@@ -91,6 +139,7 @@ export default function App() {
           </h1>
           <p className="text-gray-600 mt-2 text-md">
             Secure your spot in the <strong className="text-indigo-600">IT Career Accelerator</strong> program.
+            Mode: <em className="text-sm text-gray-400">{APP_MODE}</em>
           </p>
         </header>
 
